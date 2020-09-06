@@ -1,0 +1,268 @@
+#!/bin/sh
+
+#######################################################################################
+# File:			dirgraph
+# Author: 		David Mihola (xmihol00@stud.fit.vutbr.cz)
+# Date:   		2020-3-15
+# Case:   		IOS: first project
+# Description:	Maps a directory based on it's file sizes and subdirectories,
+#				outputs a short report and a horizontal histograph representing
+#				the file-size population of the searched directory
+#######################################################################################
+export POSIXLY_CORRECT=yes
+LAST=
+HOLD=
+DIR=
+ERR=0
+NL='\n'
+FILE_ERR_MSG=
+DIR_ERR_MSG=
+DIR_COUNT=1 #starting at 1 to include the root directory
+FILE_COUNT=0
+SIZE=0
+FILE_FRE=^$ #matches empty line
+HOLD_DIR=^$ #matches empty line
+OUT_LEN=
+NORM=1
+ERR_DIR=0
+#prepareing variables so that they can be used as an array with eval
+COUNT1=0
+COUNT2=0
+COUNT3=0
+COUNT4=0
+COUNT5=0
+COUNT6=0
+COUNT7=0
+COUNT8=0
+COUNT9=0
+MSG1="  <100 B  : "
+MSG2="  <1 KiB  : "
+MSG3="  <10 KiB : "
+MSG4="  <100 KiB: " 
+MSG5="  <1 MiB  : "
+MSG6="  <10 MiB : "
+MSG7="  <100 MiB: "
+MSG8="  <1 GiB  : "
+MSG9="  >=1 GiB : " 
+LARGEST=0
+MUL=1
+DIV=1
+#storing special characters
+HSTG="\#"
+AST="*"
+SLSH="/"
+I_RESTRICTION=0
+N_RESTRICTION=0
+IGNORED_DIR=^$ #matches empty line
+
+if [ -t 1 ] ; then
+	 OUT_LEN=$(tput cols)
+	OUT_LEN=$((OUT_LEN-13)) #decreasing the input size by the size of the category description data and by additional -1
+else 
+	OUT_LEN=67
+fi
+
+while getopts ':ni:' 2>/dev/null opt; do
+  case "$opt" in
+  n)
+	if [ $N_RESTRICTION -eq 0 ]; then #limits the -n option to be entered only once
+  		NORM=0
+		N_RESTRICTION=1
+	else
+		echo "Option -n can be used only once. Use '--' to separate options and arguments." 1>&2
+		echo "dirgraph: usage: [-i REGEX] [-n] [--] [dir]" 1>&2
+		exit 1
+	fi
+    ;;
+  i)
+	if [ $I_RESTRICTION -eq 0 ] ; then #limits the -i option to be entered only once
+		if echo "$OPTARG" | grep -E ^--$ >/dev/null ; then # '--' cannot be used as a parametr for the FILE_FRE as it specifies
+			echo "Option -i requires a parametr." 1>&2	   # the end of options
+			echo "dirgraph: usage: [-i REGEX] [-n] [--] [dir]" 1>&2
+			exit 1
+		fi
+  		FILE_FRE="$OPTARG"
+
+		I_RESTRICTION=1
+	else
+		echo "Option -i can be used only once. Use '--' to separate options and arguments." 1>&2
+		echo "dirgraph: usage: [-i REGEX] [-n] [--] [dir]" 1>&2
+		exit 1
+	fi
+    ;;
+  :)
+		echo "Option -i requires a parametr." 1>&2
+		echo "dirgraph: usage: [-i REGEX] [-n] [--] [dir]" 1>&2
+		exit 1	
+	;;
+  ?)
+	echo "dirgraph: Invalid option" 1>&2
+	echo "dirgraph: usage: [-i REGEX] [-n] [--] [dir]" 1>&2 
+	exit 1
+	;;
+  esac
+done
+
+shift $((OPTIND-1))
+
+if [ "$#" -eq 0 ]; then
+ 	DIR="$PWD"
+	 HOLD_DIR=${PWD##*/} 
+
+elif [ "$#" -eq 1 ]; then
+	HOLD_DIR=$1	#entering the searched directory
+	cd -- "$1" 2>/dev/null || { echo "Directory '$1' does not exist or cannot be entered." 1>&2; exit 1;  }
+	DIR="$PWD" 
+else
+	echo "Too many arguments" 2>&1
+	exit 1
+fi
+if echo "$HOLD_DIR" | grep -E  -- "$FILE_FRE" >/dev/null && [ -n "$HOLD_DIR" ] ; then #checking if the searched directory isn't ignored
+	echo "You cannot ignore the root directory." 1>&2
+	exit 1
+fi
+
+inspect_file () {
+	if ! echo "${1##*/}" | grep -E  -- "$FILE_FRE" >/dev/null ; then
+		SIZE=$(wc -c "$1" 2>/dev/null | awk '{ print $1 }') #getting the size of the file in bytes
+	   		if [ -n "$SIZE" ]; then #when size is empty, it is an error (the file cannot be read)
+				FILE_COUNT=$((FILE_COUNT+1))
+				if [ "$SIZE" -lt 100 ]; then
+					COUNT1=$((COUNT1+1))
+				elif [ "$SIZE" -lt 1024 ]; then
+					COUNT2=$((COUNT2+1))
+				elif [ "$SIZE" -lt 10240 ]; then
+					COUNT3=$((COUNT3+1))
+				elif [ "$SIZE" -lt 102400 ]; then
+					COUNT4=$((COUNT4+1))
+				elif [ "$SIZE" -lt 1048576 ]; then
+					COUNT5=$((COUNT5+1))
+				elif [ "$SIZE" -lt 10485760 ]; then
+					COUNT6=$((COUNT6+1))
+				elif [ "$SIZE" -lt 104857600 ]; then
+					COUNT7=$((COUNT7+1))
+				elif [ "$SIZE" -lt 1073741824 ]; then
+					COUNT8=$((COUNT8+1))
+				else
+					COUNT9=$((COUNT9+1))
+				fi
+			else
+				ERR=1 #storing that error occured
+				FILE_ERR_MSG="$FILE_ERR_MSG  $DIR${1#?}${NL}" #adding files, that cannot be accessed, to an error message
+			fi
+	fi
+}
+#to skip the firs file/directory in the find loop
+LAST=
+HOLD=
+for i in $(find . 2>/dev/null) ; do
+	if ! echo "$i" | grep -E "^\.\/.*$" >/dev/null ; then
+		HOLD="$HOLD $i" #concatinating file/directory names with space, it is necessary to be delayed by one cycle.
+		LAST=
+	else
+		LAST="$HOLD" 
+		HOLD=
+	fi
+
+	if [ -n "$LAST" ] ; then
+	#checking if the file/directory isn't in already ignored direcotory
+	if ! echo "$LAST" | grep -E  -- "$IGNORED_DIR" >/dev/null	; then
+		if test -f "$LAST" && ! test -L "$LAST"; then
+			inspect_file "$LAST" #caling a function to sort the file accordingly
+			elif test -d "$LAST"; then
+				if ! echo "${LAST##*/}" | grep -E  -- "$FILE_FRE" >/dev/null ; then
+					DIR_COUNT=$((DIR_COUNT+1)) 
+					if [ ! -r "$LAST" ] ; then 
+						ERR=1 #storing that error occured
+						DIR_ERR_MSG="$DIR_ERR_MSG  $DIR/${LAST#??}${NL}" #adding directories, that cannot be accessed, to an error message
+					fi
+				else
+					IGNORED_DIR=${LAST##*/} #updating the ignored path
+				fi
+			fi
+		fi
+	fi
+
+	if [ -z "$HOLD" ] ; then
+		HOLD="$i" #storing the current input if it wasn't aready concatinanted
+	fi
+
+done
+#adding the last file/directory from the find loop
+if ! echo "$HOLD" | grep -E  -- "$IGNORED_DIR" >/dev/null	; then
+	if test -f "$HOLD" && ! test -L "$HOLD"; then
+		inspect_file "$HOLD" 
+	elif test -d "$HOLD"; then
+		if ! echo "${HOLD##*/}" | grep -E  -- "$FILE_FRE" >/dev/null; then
+			DIR_COUNT=$((DIR_COUNT+1))
+			if [ ! -r "$HOLD" ] ; then 
+				ERR=1 #storing that error occured
+				DIR_ERR_MSG="$DIR_ERR_MSG  $DIR/${LAST#??}${NL}" #adding directories, that cannot be accessed, to an error message
+			fi
+		fi
+	fi
+fi
+
+if  [ $NORM -eq 0 ] ; then
+	i=1
+	while [ $i -le 9 ]; do #finding the longes line
+		eval "VAR=\$COUNT$i"
+		if [ "$VAR" -gt "$LARGEST" ] ; then
+			LARGEST="$VAR"
+		fi
+		i=$((i+1))
+	done
+	if [ "$LARGEST" -gt 0 ] ; then #to avoid division by 0
+		if [ "$LARGEST" -lt "$OUT_LEN" ] ; then #when the longest line is shorter than the terminal size (otherwise MUL==1)
+			MUL=$(echo "$OUT_LEN" / "$LARGEST" | bc -l)
+
+		elif [ "$LARGEST" -gt "$OUT_LEN" ] ; then #when the longest line is longer than the terminal size (otherwise DIV==1)
+			DIV=$(echo "$LARGEST" / "$OUT_LEN" | bc -l)
+		fi
+		i=1
+		while [ $i -le 9 ]; do
+			eval "VAR=\$COUNT$i"
+			VAR=$(echo "$MUL" \* "$VAR" / "$DIV" | bc -l) #rescaling 
+			VAR=$(echo "scale=0;(($VAR + 0.5) / 1)" | bc) #rounding
+			eval "COUNT$i=\$VAR"
+			i=$((i+1))
+		done
+	fi	
+fi
+
+i=1;
+while [ $i -le 9 ]; do
+	j=0
+	eval "VAR=\$COUNT$i"
+	while [ $j -lt "$VAR" ]; do
+		eval "MSG$i=\$MSG$i$HSTG" #adding the '#' for the print
+		j=$((j+1))
+	done
+	i=$((i+1))
+done 
+
+echo "Root directory: $HOLD_DIR" 
+echo "Directories: $DIR_COUNT" 
+echo "All files: $FILE_COUNT"
+echo "File size histogram:"
+i=1
+while [ $i -le 9 ]; do #printing the histograph
+	eval " echo \"\$MSG$i\""
+	i=$((i+1))
+done 
+
+if [ $ERR -gt 0 ]; then #printing error messages, when error occures
+	if [ -n "$DIR_ERR_MSG" ] ; then
+		DIR_ERR_MSG="These directories from the total count cannot be accessed:${NL}$DIR_ERR_MSG"
+		DIR_ERR_MSG=${DIR_ERR_MSG%??}
+		echo "$DIR_ERR_MSG" 1>&2
+	fi
+	if [ -n "$FILE_ERR_MSG" ] ; then
+		FILE_ERR_MSG="These files cannot be accessed:${NL}$FILE_ERR_MSG"
+		FILE_ERR_MSG=${FILE_ERR_MSG%??}
+		echo "$FILE_ERR_MSG" 1>&2
+	fi
+	exit 1
+else
+	exit 0
+fi
